@@ -1,0 +1,56 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wheel of (Cosmic Encounter) Variants!</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Google Fonts for Cosmic & retro-game feel -->
+    <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;700;900&family=Orbitron:wght@500;900&display=swap" rel="stylesheet">
+</head>
+<body>
+
+    <div class="stars"></div>
+
+    <header>
+        <h1 class="main-title">
+            WHEEL OF 
+            <span class="sub-title">(Cosmic Encounter)</span> 
+            VARIANTS!
+        </h1>
+    </header>
+
+    <main class="game-container">
+        <!-- The Spinning Wheel Unit -->
+        <div class="wheel-outer">
+            <div class="pointer"></div>
+            <div class="wheel-canvas-container">
+                <canvas id="wheel-canvas" width="460" height="460"></canvas>
+            </div>
+        </div>
+
+        <!-- Controls & Results Display Panel -->
+        <div class="panel">
+            <div class="status-container">
+                <div class="status-label" id="status-label">Ready to Roll</div>
+                <div class="result-display" id="result-display">Spin the wheel to begin!</div>
+            </div>
+
+            <div class="button-area">
+                <button id="spin-btn" class="btn">SPIN WHEEL</button>
+            </div>
+
+            <!-- List of remaining active options on the current wheel -->
+            <div class="pool-container">
+                <h3>Current Wheel Options Pool:</h3>
+                <div class="pool-list" id="pool-list"></div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Load scripts in order -->
+    <script src="config.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

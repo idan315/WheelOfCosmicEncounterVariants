@@ -11,9 +11,9 @@ const WHEEL_CONFIG = {
         { name: "Double Powers", weight: 1, color: "#feca57" },             // Alien Gold
         { name: "Lux", weight: 1, color: "#54a0ff" },                       // Soft Star Blue
         { name: "Evolution", weight: 1, color: "#5f27cd" },                 // Nebular Purple
-        { nam†`e: "Moons", weight: 1, color: "#01a3a4" },                   // Deep Teal
+        { name: "Moons", weight: 1, color: "#01a3a4" },                     // Deep Teal
         { name: "Tech", weight: 1, color: "#8395a7" },                      // Space Grey
-        { name: "Foreign Aid", weight: 1, color: "#f5f6fa" },                // Starlight White
+        { name: "Foreign Aid", weight: 1, color: "#f5f6fa" },               // Starlight White
         { name: "Double Variant", weight: 1, color: "#ff9ff3" }             // Pastel Pink
     ]
 };

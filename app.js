@@ -128,14 +128,26 @@ resizeCanvas();
 
 let currentAngle = 0;
 let angularVelocity = 0;
-const baseDrag = 0.996;
-const settleThreshold = 0.02;
+let flapperAngle = 0;
+let flapperAngularVelocity = 0;
+const wheelLinearDrag = 0.34;
+const wheelConstantDrag = 0.17;
+const flapperGravity = 26;
+const flapperDamping = 4.6;
+const flapperMaxDeflection = 0.82;
+const contactStrength = 58;
+const contactDamping = 6.8;
+const wheelBackdrive = 0.18;
+const settleWheelThreshold = 0.045;
+const settleFlapperThreshold = 0.05;
+const settleAngleThreshold = 0.035;
+const settledFrameRequirement = 24;
 let isSpinning = false;
-let isSettling = false;
-let settleTargetAngle = 0;
 let pointerKick = 0;
 const pointerAngle = 1.5 * Math.PI;
 let lastPegCross = 0;
+let settledFrames = 0;
+let lastFrameTime = null;
 
 function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
@@ -149,6 +161,11 @@ function normalizePositive(angle) {
 function normalizeSigned(angle) {
     const wrapped = normalizePositive(angle);
     return wrapped > Math.PI ? wrapped - (2 * Math.PI) : wrapped;
+}
+
+function dampToZero(value, amount) {
+    if (Math.abs(value) <= amount) return 0;
+    return value - (Math.sign(value) * amount);
 }
 
 function getNoVariantOption() {
@@ -420,19 +437,26 @@ function drawWheel() {
 
 function applyPointerMotion() {
     pointerKick *= 0.8;
-    pointerEl.style.transform = `translateX(-50%) rotate(${pointerKick.toFixed(2)}deg)`;
+    const displayAngle = ((flapperAngle + pointerKick) * 180) / Math.PI;
+    pointerEl.style.transform = `translateX(-50%) rotate(${displayAngle.toFixed(2)}deg)`;
 }
 
 function applyPegImpact(passes) {
-    const cappedPasses = Math.min(Math.max(1, passes), 5);
+    const direction = Math.sign(passes) || Math.sign(angularVelocity) || 1;
+    const cappedPasses = Math.min(Math.max(1, Math.abs(passes)), 5);
+    const impactStrength = Math.min(1.05, 0.16 + (Math.abs(angularVelocity) * 0.03));
 
     for (let i = 0; i < cappedPasses; i++) {
         playClickSound();
     }
 
-    const energyLoss = Math.min(0.04, (0.004 * cappedPasses) + (angularVelocity * 0.022));
-    angularVelocity = Math.max(0, angularVelocity - energyLoss);
-    pointerKick = Math.min(20, pointerKick + 4 + (angularVelocity * 17));
+    angularVelocity = dampToZero(angularVelocity, impactStrength * cappedPasses * 0.085);
+    flapperAngularVelocity += direction * impactStrength * cappedPasses * 0.58;
+    pointerKick = clamp(
+        pointerKick + (direction * impactStrength * 0.16),
+        -flapperMaxDeflection * 0.6,
+        flapperMaxDeflection * 0.6
+    );
 }
 
 function detectPegCrossings() {
@@ -442,68 +466,110 @@ function detectPegCrossings() {
     const pegCross = Math.floor((currentAngle - pointerAngle) / sliceAngle);
     const passed = pegCross - lastPegCross;
 
-    if (passed > 0) {
+    if (passed !== 0) {
         applyPegImpact(passed);
     }
 
     lastPegCross = pegCross;
 }
 
-function startSettling() {
-    if (!currentSlices.length) return;
-    isSettling = true;
+function getFlapperContactState() {
+    if (!currentSlices.length) {
+        return null;
+    }
 
     const sliceAngle = (2 * Math.PI) / currentSlices.length;
-    const pegFloat = (pointerAngle - currentAngle) / sliceAngle;
-    const nearestPeg = Math.round(pegFloat);
-    settleTargetAngle = pointerAngle - (nearestPeg * sliceAngle);
+    const nearestPeg = Math.round((pointerAngle - currentAngle) / sliceAngle);
+    const pegOffset = normalizeSigned((currentAngle + (nearestPeg * sliceAngle)) - pointerAngle);
+    const contactDelta = normalizeSigned(pegOffset - flapperAngle);
+    const contactWindow = Math.min(flapperMaxDeflection, sliceAngle * 0.72);
+    const inContact = Math.abs(pegOffset) < contactWindow && Math.abs(contactDelta) < contactWindow * 1.15;
+    const strength = inContact
+        ? Math.max(0, 1 - (Math.max(Math.abs(pegOffset), Math.abs(contactDelta) * 0.85) / contactWindow))
+        : 0;
+
+    return {
+        contactDelta,
+        inContact,
+        pegOffset,
+        strength
+    };
 }
 
 function getWinningIndex() {
     if (!currentSlices.length) return 0;
     const sliceAngle = (2 * Math.PI) / currentSlices.length;
-    let targetAngle = normalizePositive(pointerAngle - currentAngle - 0.00001);
+    const effectivePointerAngle = normalizePositive(pointerAngle + flapperAngle);
+    const targetAngle = normalizePositive(effectivePointerAngle - currentAngle - 0.00001);
     return Math.floor(targetAngle / sliceAngle) % currentSlices.length;
 }
 
 function finishSpin() {
-    currentAngle = settleTargetAngle;
     angularVelocity = 0;
+    flapperAngularVelocity = 0;
     isSpinning = false;
-    isSettling = false;
+    settledFrames = 0;
     spinBtn.disabled = false;
     handleResult(getWinningIndex());
 }
 
-function updateSpinningPhysics() {
-    currentAngle += angularVelocity;
-    angularVelocity *= baseDrag;
-    detectPegCrossings();
+function applyWheelDrag(dt) {
+    if (!angularVelocity) return;
 
-    if (angularVelocity < settleThreshold) {
-        startSettling();
+    const drag = ((wheelLinearDrag * Math.abs(angularVelocity)) + wheelConstantDrag) * dt;
+    angularVelocity = dampToZero(angularVelocity, drag);
+}
+
+function updateFlapperPhysics(dt, contactState) {
+    let angularAcceleration = (-flapperGravity * Math.sin(flapperAngle)) - (flapperDamping * flapperAngularVelocity);
+
+    if (contactState?.inContact) {
+        const coupling = contactState.strength;
+        const relativeVelocity = angularVelocity - flapperAngularVelocity;
+        const contactAcceleration = ((contactState.contactDelta * contactStrength) + (relativeVelocity * contactDamping)) * coupling;
+
+        angularAcceleration += contactAcceleration;
+        angularVelocity -= contactAcceleration * wheelBackdrive * dt;
+    }
+
+    flapperAngularVelocity += angularAcceleration * dt;
+    flapperAngle += flapperAngularVelocity * dt;
+
+    if (Math.abs(flapperAngle) > flapperMaxDeflection) {
+        flapperAngle = clamp(flapperAngle, -flapperMaxDeflection, flapperMaxDeflection);
+        flapperAngularVelocity *= 0.42;
     }
 }
 
-function updateSettlingPhysics() {
-    const delta = normalizeSigned(settleTargetAngle - currentAngle);
-    angularVelocity += delta * 0.11;
-    angularVelocity *= 0.72;
-    currentAngle += angularVelocity;
+function updateSettleState(contactState) {
+    const restOffset = contactState?.inContact ? contactState.contactDelta : flapperAngle;
+    const isNearRest = Math.abs(angularVelocity) < settleWheelThreshold
+        && Math.abs(flapperAngularVelocity) < settleFlapperThreshold
+        && Math.abs(restOffset) < settleAngleThreshold;
 
-    if (Math.abs(delta) < 0.0009 && Math.abs(angularVelocity) < 0.0009) {
+    settledFrames = isNearRest ? settledFrames + 1 : 0;
+
+    if (settledFrames >= settledFrameRequirement) {
         finishSpin();
     }
 }
 
+function updateSpinningPhysics(dt) {
+    currentAngle += angularVelocity * dt;
+    detectPegCrossings();
+    applyWheelDrag(dt);
+    const contactState = getFlapperContactState();
+    updateFlapperPhysics(dt, contactState);
+    updateSettleState(contactState);
+}
+
 // Updates rotation values and peg interactions each frame
-function updatePhysics() {
+function updatePhysics(timestamp = 0) {
+    const dt = lastFrameTime === null ? (1 / 60) : Math.min(0.05, (timestamp - lastFrameTime) / 1000);
+    lastFrameTime = timestamp;
+
     if (isSpinning) {
-        if (!isSettling) {
-            updateSpinningPhysics();
-        } else {
-            updateSettlingPhysics();
-        }
+        updateSpinningPhysics(dt);
     }
 
     applyPointerMotion();
@@ -574,16 +640,24 @@ function triggerWarpTransition(midpointCallback) {
 function startSpin() {
     if (!currentSlices.length) return;
     isSpinning = true;
-    isSettling = false;
     spinBtn.disabled = true;
-    angularVelocity = 0.28 + (Math.random() * 0.22);
+    angularVelocity = 10.5 + (Math.random() * 4.5);
+    flapperAngle = 0;
+    flapperAngularVelocity = 0;
     pointerKick = 0;
+    settledFrames = 0;
     syncPegCounter();
 }
 
 function resetGame() {
     gameState = 'NORMAL';
     doubleVariantSelections = [];
+    angularVelocity = 0;
+    flapperAngle = 0;
+    flapperAngularVelocity = 0;
+    pointerKick = 0;
+    settledFrames = 0;
+    isSpinning = false;
     rebuildCurrentPoolForState();
     statusLabel.textContent = 'Ready to Roll';
     resultDisplay.textContent = 'Spin the wheel to begin!';

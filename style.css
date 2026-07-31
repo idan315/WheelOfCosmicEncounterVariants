@@ -85,9 +85,9 @@ header {
     width: 476px;
     height: 476px;
     padding: 8px;
-    background: #111;
+    background: radial-gradient(circle at 30% 25%, #2d2b3f 0%, #11111a 45%, #07070c 100%);
     border-radius: 50%;
-    box-shadow: 0 0 35px rgba(0, 240, 255, 0.35), inset 0 0 20px rgba(255, 255, 255, 0.05);
+    box-shadow: 0 0 35px rgba(0, 240, 255, 0.35), inset 0 6px 18px rgba(255, 255, 255, 0.14), inset 0 -10px 20px rgba(0, 0, 0, 0.55);
     border: 4px solid #1a1a1a;
 }
 
@@ -107,20 +107,6 @@ canvas {
 canvas.transitioning {
     filter: blur(15px) brightness(1.5);
     transform: scale(0.9) rotate(180deg);
-}
-
-.pointer {
-    position: absolute;
-    top: -12px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 0;
-    height: 0;
-    border-left: 20px solid transparent;
-    border-right: 20px solid transparent;
-    border-top: 35px solid #ff007f;
-    filter: drop-shadow(0 0 8px #ff007f);
-    z-index: 10;
 }
 
 /* Control Panel */
@@ -196,6 +182,113 @@ canvas.transitioning {
     box-shadow: none;
     cursor: not-allowed;
     transform: none;
+}
+
+.btn-secondary {
+    background: linear-gradient(135deg, #132349, #304f88);
+    box-shadow: 0 0 15px rgba(48, 79, 136, 0.45);
+}
+
+.btn-secondary:hover:not(:disabled) {
+    background: linear-gradient(135deg, #1b3470, #3e63a5);
+    box-shadow: 0 0 25px rgba(48, 79, 136, 0.75);
+}
+
+.btn-small {
+    font-size: 0.82rem;
+    padding: 10px 18px;
+    border-radius: 14px;
+    letter-spacing: 1px;
+}
+
+.config-area {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    align-items: center;
+}
+
+.config-panel {
+    width: 100%;
+    background: rgba(4, 10, 26, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 12px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.config-panel[hidden] {
+    display: none !important;
+}
+
+.config-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.config-row label {
+    font-size: 0.82rem;
+    color: #dce4ff;
+}
+
+.config-row input {
+    width: 90px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    color: #fff;
+    border-radius: 6px;
+    padding: 5px 7px;
+}
+
+.config-option-row {
+    gap: 6px;
+}
+
+.config-name-input {
+    flex: 1;
+    min-width: 0;
+    width: auto !important;
+    font-family: 'Exo 2', sans-serif;
+    font-size: 0.82rem;
+}
+
+.config-weight-input {
+    width: 62px !important;
+    flex: none;
+}
+
+.btn-remove {
+    background: linear-gradient(135deg, #7a1330, #b3244a);
+    box-shadow: none;
+    padding: 5px 10px;
+    font-size: 0.75rem;
+    border-radius: 8px;
+    line-height: 1;
+}
+
+.btn-remove:hover:not(:disabled) {
+    background: linear-gradient(135deg, #a01a40, #e02f5e);
+    box-shadow: 0 0 12px rgba(224, 47, 94, 0.6);
+}
+
+#config-options-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 190px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.config-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
 }
 
 /* Dynamic Option Pool */

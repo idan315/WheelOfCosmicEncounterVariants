@@ -24,7 +24,6 @@
     <main class="game-container">
         <!-- The Spinning Wheel Unit -->
         <div class="wheel-outer">
-            <div class="pointer"></div>
             <div class="wheel-canvas-container">
                 <canvas id="wheel-canvas" width="460" height="460"></canvas>
             </div>
@@ -41,6 +40,22 @@
                 <button id="spin-btn" class="btn">SPIN WHEEL</button>
             </div>
 
+            <div class="config-area">
+                <button id="toggle-config-btn" class="btn btn-secondary">Configure Wheel</button>
+                <div class="config-panel" id="config-panel" hidden>
+                    <div class="config-row">
+                        <label for="no-variant-probability">No Variants probability (%)</label>
+                        <input id="no-variant-probability" type="number" min="0" max="95" step="1" value="50">
+                    </div>
+                    <div id="config-options-list"></div>
+                    <div class="config-actions">
+                        <button id="add-config-row-btn" class="btn btn-small btn-secondary">+ Add Row</button>
+                        <button id="apply-config-btn" class="btn btn-small">Apply</button>
+                        <button id="reset-config-btn" class="btn btn-small btn-secondary">Reset to Default</button>
+                    </div>
+                </div>
+            </div>
+
             <!-- List of remaining active options on the current wheel -->
             <div class="pool-container">
                 <h3>Current Wheel Options Pool:</h3>
@@ -51,6 +66,7 @@
 
     <!-- Load scripts in order -->
     <script src="config.js"></script>
+    <script src="physics.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

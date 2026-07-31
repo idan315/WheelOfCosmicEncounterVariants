@@ -20,35 +20,167 @@ const configState = {
 
 // Audio Context (Initialized securely on first user click)
 let audioCtx = null;
+let masterGain = null;
+let noiseBuffer = null;
+let spinNoise = null;
 
 function initAudio() {
     if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        masterGain = audioCtx.createGain();
+        masterGain.gain.value = 0.9;
+        masterGain.connect(audioCtx.destination);
     }
     if (audioCtx.state === 'suspended') {
         audioCtx.resume();
     }
 }
 
+// One second of white noise, reused by every percussive/whoosh voice
+function getNoiseBuffer() {
+    if (!noiseBuffer) {
+        const length = Math.floor(audioCtx.sampleRate);
+        noiseBuffer = audioCtx.createBuffer(1, length, audioCtx.sampleRate);
+        const data = noiseBuffer.getChannelData(0);
+        for (let i = 0; i < length; i++) {
+            data[i] = (Math.random() * 2) - 1;
+        }
+    }
+    return noiseBuffer;
+}
+
 // Generate synthesized mechanical peg clicks, loudness follows the real impact speed
 function playClickSound(impactSpeed = 1) {
     if (!audioCtx) return;
     const strength = clamp(impactSpeed / 5, 0.12, 1);
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
+    const now = audioCtx.currentTime;
+    const variation = 0.92 + (Math.random() * 0.16);
 
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
+    // Sharp noise transient: the plastic flapper slapping the metal peg
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = getNoiseBuffer();
+    noise.playbackRate.value = 0.8 + (strength * 0.6);
+
+    const bandpass = audioCtx.createBiquadFilter();
+    bandpass.type = 'bandpass';
+    bandpass.frequency.setValueAtTime((1500 + (strength * 2400)) * variation, now);
+    bandpass.frequency.exponentialRampToValueAtTime(700, now + 0.05);
+    bandpass.Q.value = 5;
+
+    const noiseGain = audioCtx.createGain();
+    noiseGain.gain.setValueAtTime(0.03 + (strength * 0.1), now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.0005, now + 0.05);
+
+    noise.connect(bandpass);
+    bandpass.connect(noiseGain);
+    noiseGain.connect(masterGain);
+    noise.start(now);
+    noise.stop(now + 0.06);
+
+    // Woody body resonance beneath the transient
+    const osc = audioCtx.createOscillator();
+    const oscGain = audioCtx.createGain();
+    osc.connect(oscGain);
+    oscGain.connect(masterGain);
 
     osc.type = 'triangle';
-    osc.frequency.setValueAtTime(420 + (strength * 420), audioCtx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(120, audioCtx.currentTime + 0.035);
+    osc.frequency.setValueAtTime((330 + (strength * 300)) * variation, now);
+    osc.frequency.exponentialRampToValueAtTime(95, now + 0.07);
 
-    gain.gain.setValueAtTime(0.02 + (strength * 0.06), audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.035);
+    oscGain.gain.setValueAtTime(0.018 + (strength * 0.045), now);
+    oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
 
-    osc.start();
-    osc.stop(audioCtx.currentTime + 0.035);
+    osc.start(now);
+    osc.stop(now + 0.09);
+}
+
+// Low rushing whoosh that lives for as long as the wheel is turning
+function startSpinSound() {
+    if (!audioCtx) return;
+    stopSpinSound();
+
+    const source = audioCtx.createBufferSource();
+    source.buffer = getNoiseBuffer();
+    source.loop = true;
+
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(240, audioCtx.currentTime);
+    filter.Q.value = 1.4;
+
+    const gain = audioCtx.createGain();
+    gain.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+
+    source.connect(filter);
+    filter.connect(gain);
+    gain.connect(masterGain);
+    source.start();
+
+    spinNoise = { source, filter, gain };
+}
+
+// Whoosh brightness and loudness track the actual wheel speed
+function updateSpinSound(wheelSpeed) {
+    if (!audioCtx || !spinNoise) return;
+    const now = audioCtx.currentTime;
+    const intensity = clamp(Math.abs(wheelSpeed) / MAX_SPIN_SPEED, 0, 1);
+
+    spinNoise.gain.gain.setTargetAtTime(0.006 + (intensity * 0.07), now, 0.08);
+    spinNoise.filter.frequency.setTargetAtTime(200 + (intensity * 900), now, 0.08);
+}
+
+function stopSpinSound() {
+    if (!audioCtx || !spinNoise) return;
+    const { source, gain } = spinNoise;
+    const now = audioCtx.currentTime;
+
+    gain.gain.cancelScheduledValues(now);
+    gain.gain.setTargetAtTime(0.0001, now, 0.05);
+    try {
+        source.stop(now + 0.35);
+    } catch (error) {
+        // Older browsers throw if the source already stopped
+    }
+    spinNoise = null;
+}
+
+// Heavy mechanical thunk played the moment the wheel settles on a slice
+function playSettleSound() {
+    if (!audioCtx) return;
+    const now = audioCtx.currentTime;
+
+    const osc = audioCtx.createOscillator();
+    const oscGain = audioCtx.createGain();
+    osc.connect(oscGain);
+    oscGain.connect(masterGain);
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(180, now);
+    osc.frequency.exponentialRampToValueAtTime(55, now + 0.22);
+
+    oscGain.gain.setValueAtTime(0.16, now);
+    oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+
+    osc.start(now);
+    osc.stop(now + 0.3);
+
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = getNoiseBuffer();
+
+    const lowpass = audioCtx.createBiquadFilter();
+    lowpass.type = 'lowpass';
+    lowpass.frequency.setValueAtTime(900, now);
+    lowpass.frequency.exponentialRampToValueAtTime(180, now + 0.16);
+
+    const noiseGain = audioCtx.createGain();
+    noiseGain.gain.setValueAtTime(0.07, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.0005, now + 0.18);
+
+    noise.connect(lowpass);
+    lowpass.connect(noiseGain);
+    noiseGain.connect(masterGain);
+    noise.start(now);
+    noise.stop(now + 0.2);
 }
 
 // Synthesize custom victorious chimes
@@ -59,7 +191,7 @@ function playWinChime() {
         const osc = audioCtx.createOscillator();
         const gain = audioCtx.createGain();
         osc.connect(gain);
-        gain.connect(audioCtx.destination);
+        gain.connect(masterGain);
         osc.type = 'sine';
         osc.frequency.setValueAtTime(freq, start);
         gain.gain.setValueAtTime(0.12, start);
@@ -80,7 +212,7 @@ function playDoubleWarpSound() {
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.connect(gain);
-    gain.connect(audioCtx.destination);
+    gain.connect(masterGain);
 
     osc.type = 'sawtooth';
     osc.frequency.setValueAtTime(140, now);
@@ -107,6 +239,7 @@ const noVariantProbabilityInput = document.getElementById('no-variant-probabilit
 const configOptionsList = document.getElementById('config-options-list');
 const applyConfigBtn = document.getElementById('apply-config-btn');
 const resetConfigBtn = document.getElementById('reset-config-btn');
+const addConfigRowBtn = document.getElementById('add-config-row-btn');
 
 let canvasSize = 460;
 let cx = canvasSize / 2;
@@ -266,28 +399,71 @@ function updateUIOptionPool(excludedNames) {
     });
 }
 
+// Colors handed out to freshly added rows
+const NEW_OPTION_COLORS = [
+    '#ff6b81', '#48dbfb', '#1dd1a1', '#feca57', '#c56cf0',
+    '#ff9f43', '#00d2d3', '#5f27cd', '#ee5253', '#a4b0be'
+];
+
+function pickNewOptionColor() {
+    const used = new Set(configState.options.map(option => option.color));
+    const available = NEW_OPTION_COLORS.find(color => !used.has(color));
+    return available || NEW_OPTION_COLORS[configState.options.length % NEW_OPTION_COLORS.length];
+}
+
+// Editable row: free-text name, weight, and a remove button
+function createOptionRow(option) {
+    const row = document.createElement('div');
+    row.className = 'config-row config-option-row';
+    row.dataset.color = option.color;
+
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.className = 'config-name-input';
+    nameInput.dataset.role = 'name';
+    nameInput.placeholder = 'Variant name';
+    nameInput.value = option.name;
+
+    const weightInput = document.createElement('input');
+    weightInput.type = 'number';
+    weightInput.className = 'config-weight-input';
+    weightInput.dataset.role = 'weight';
+    weightInput.min = '0';
+    weightInput.step = '1';
+    weightInput.value = option.weight;
+    weightInput.title = 'Weight';
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'btn btn-small btn-remove';
+    removeBtn.textContent = '✕';
+    removeBtn.title = `Remove ${option.name || 'this row'}`;
+    removeBtn.addEventListener('click', () => {
+        if (isSpinning) return;
+        row.remove();
+        applyConfigFromForm();
+    });
+
+    row.appendChild(nameInput);
+    row.appendChild(weightInput);
+    row.appendChild(removeBtn);
+    return row;
+}
+
 function renderConfigForm() {
     noVariantProbabilityInput.value = configState.noVariantProbability;
     configOptionsList.innerHTML = '';
 
     getOtherOptions().forEach(option => {
-        const row = document.createElement('div');
-        row.className = 'config-row';
-
-        const label = document.createElement('label');
-        label.textContent = option.name;
-
-        const input = document.createElement('input');
-        input.type = 'number';
-        input.min = '0';
-        input.step = '1';
-        input.value = option.weight;
-        input.dataset.optionName = option.name;
-
-        row.appendChild(label);
-        row.appendChild(input);
-        configOptionsList.appendChild(row);
+        configOptionsList.appendChild(createOptionRow(option));
     });
+}
+
+function addConfigRow() {
+    const row = createOptionRow({ name: '', weight: 1, color: pickNewOptionColor() });
+    configOptionsList.appendChild(row);
+    row.scrollIntoView({ block: 'nearest' });
+    row.querySelector('input[data-role="name"]').focus();
 }
 
 function getStateExclusions() {
@@ -495,11 +671,14 @@ function getWinningIndex() {
 function finishSpin() {
     isSpinning = false;
     spinBtn.disabled = false;
+    stopSpinSound();
+    playSettleSound();
     handleResult(getWinningIndex());
 }
 
 function updateSpinningPhysics(dt) {
     playImpactSounds(sim.step(dt));
+    updateSpinSound(sim.state.wheelOmega);
 
     if (sim.isAtRest()) {
         finishSpin();
@@ -545,7 +724,7 @@ function handleResult(winningIndex) {
             playWinChime();
             statusLabel.textContent = 'Selected Variant';
             resultDisplay.textContent = winner.name;
-            spinBtn.textContent = 'RESET WHEEL';
+            spinBtn.textContent = 'SPIN AGAIN';
         }
     } else if (gameState === 'DOUBLE_1') {
         doubleVariantSelections.push(winner.name);
@@ -570,7 +749,7 @@ function handleResult(winningIndex) {
         playWinChime();
         statusLabel.textContent = 'Double Variant Selected!';
         resultDisplay.innerHTML = `<span style="font-size: 1.25rem; color:#ff9ff3;">${doubleVariantSelections[0]}</span><br>&<br><span style="font-size: 1.25rem; color:#ff9ff3;">${doubleVariantSelections[1]}</span>`;
-        spinBtn.textContent = 'RESET WHEEL';
+        spinBtn.textContent = 'SPIN AGAIN';
     }
 }
 
@@ -587,6 +766,9 @@ function startSpin() {
     if (!currentSlices.length) return;
     isSpinning = true;
     spinBtn.disabled = true;
+    statusLabel.textContent = 'Spinning...';
+    resultDisplay.textContent = 'The wheel is turning!';
+    startSpinSound();
     syncPegCounter();
     sim.spin(MIN_SPIN_SPEED + (Math.random() * (MAX_SPIN_SPEED - MIN_SPIN_SPEED)));
 }
@@ -595,6 +777,7 @@ function resetGame() {
     gameState = 'NORMAL';
     doubleVariantSelections = [];
     isSpinning = false;
+    stopSpinSound();
     sim.reset();
     rebuildCurrentPoolForState();
     statusLabel.textContent = 'Ready to Roll';
@@ -608,13 +791,27 @@ function applyConfigFromForm() {
         ? clamp(probabilityValue, MIN_PROBABILITY, MAX_PROBABILITY)
         : 50;
 
-    configOptionsList.querySelectorAll('input[data-option-name]').forEach(input => {
-        const option = configState.options.find(item => item.name === input.dataset.optionName);
-        if (!option) return;
+    const editedOptions = [];
+    configOptionsList.querySelectorAll('.config-option-row').forEach(row => {
+        const name = row.querySelector('input[data-role="name"]').value.trim();
+        if (!name || name === NO_VARIANT_NAME) return;
+        if (editedOptions.some(option => option.name === name)) return;
 
-        const weightValue = parseInt(input.value, 10);
-        option.weight = Number.isFinite(weightValue) ? Math.max(0, weightValue) : option.weight;
+        const weightValue = parseInt(row.querySelector('input[data-role="weight"]').value, 10);
+        editedOptions.push({
+            name,
+            weight: Number.isFinite(weightValue) ? Math.max(0, weightValue) : 1,
+            color: row.dataset.color
+        });
     });
+
+    const noVariant = getNoVariantOption() || { name: NO_VARIANT_NAME, weight: 1, color: '#16162a' };
+    configState.options = [noVariant, ...editedOptions];
+
+    // A pool rebuilt mid-game must not reference variants that no longer exist
+    doubleVariantSelections = doubleVariantSelections.filter(
+        selection => configState.options.some(option => option.name === selection)
+    );
 
     syncNoVariantWeight();
     renderConfigForm();
@@ -622,7 +819,7 @@ function applyConfigFromForm() {
 
     if (gameState === 'FINISHED') {
         statusLabel.textContent = 'Configuration Updated';
-        resultDisplay.textContent = 'Press RESET WHEEL to spin with new settings';
+        resultDisplay.textContent = 'Press SPIN AGAIN to spin with new settings';
     }
 }
 
@@ -648,7 +845,6 @@ spinBtn.addEventListener('click', () => {
 
     if (gameState === 'FINISHED') {
         resetGame();
-        return;
     }
 
     if (!isSpinning) {
@@ -675,6 +871,11 @@ applyConfigBtn.addEventListener('click', () => {
 resetConfigBtn.addEventListener('click', () => {
     if (isSpinning) return;
     resetConfig();
+});
+
+addConfigRowBtn.addEventListener('click', () => {
+    if (isSpinning) return;
+    addConfigRow();
 });
 
 // Setup primary base configuration on script launch

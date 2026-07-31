@@ -1,3 +1,13 @@
+// Returns '#000000' for light backgrounds and '#ffffff' for dark ones
+function getTextColorForBg(hex) {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    // Perceived luminance (ITU-R BT.601)
+    const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+    return luminance > 160 ? '#000000' : '#ffffff';
+}
+
 // Game State Management
 let gameState = 'NORMAL'; // Transitions: 'NORMAL' -> 'DOUBLE_1' -> 'DOUBLE_2' -> 'FINISHED'
 let currentSlices = [];
@@ -512,7 +522,7 @@ function drawWheel() {
         const midAngle = startAngle + sliceAngle / 2;
         ctx.rotate(midAngle);
 
-        ctx.fillStyle = '#ffffff';
+        ctx.fillStyle = getTextColorForBg(currentSlices[i].color);
         ctx.font = 'bold 11px "Exo 2", sans-serif';
         if (canvasSize < 350) ctx.font = 'bold 9px "Exo 2", sans-serif';
         ctx.textAlign = 'right';

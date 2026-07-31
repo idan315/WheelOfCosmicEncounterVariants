@@ -1,9 +1,22 @@
-// app.js
-
 // Game State Management
 let gameState = 'NORMAL'; // Transitions: 'NORMAL' -> 'DOUBLE_1' -> 'DOUBLE_2' -> 'FINISHED'
 let currentSlices = [];
 let doubleVariantSelections = [];
+
+const NO_VARIANT_NAME = 'No Variants (Rewards only)';
+const DOUBLE_VARIANT_NAME = 'Double Variant';
+const MIN_PROBABILITY = 0;
+const MAX_PROBABILITY = 99;
+
+const baseOptions = WHEEL_CONFIG.options.map(option => ({ ...option }));
+const configState = {
+    noVariantProbability: clamp(
+        Number.isFinite(WHEEL_CONFIG.noVariantProbability) ? WHEEL_CONFIG.noVariantProbability : 50,
+        MIN_PROBABILITY,
+        MAX_PROBABILITY
+    ),
+    options: baseOptions.map(option => ({ ...option }))
+};
 
 // Audio Context (Initialized securely on first user click)
 let audioCtx = null;
@@ -22,19 +35,19 @@ function playClickSound() {
     if (!audioCtx) return;
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
-    
+
     osc.connect(gain);
     gain.connect(audioCtx.destination);
-    
+
     osc.type = 'triangle';
-    osc.frequency.setValueAtTime(550, audioCtx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(80, audioCtx.currentTime + 0.03);
-    
-    gain.gain.setValueAtTime(0.06, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.03);
-    
+    osc.frequency.setValueAtTime(620, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(120, audioCtx.currentTime + 0.035);
+
+    gain.gain.setValueAtTime(0.07, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.035);
+
     osc.start();
-    osc.stop(audioCtx.currentTime + 0.03);
+    osc.stop(audioCtx.currentTime + 0.035);
 }
 
 // Synthesize custom victorious chimes
@@ -67,14 +80,14 @@ function playDoubleWarpSound() {
     const gain = audioCtx.createGain();
     osc.connect(gain);
     gain.connect(audioCtx.destination);
-    
+
     osc.type = 'sawtooth';
     osc.frequency.setValueAtTime(140, now);
     osc.frequency.linearRampToValueAtTime(850, now + 0.85);
-    
+
     gain.gain.setValueAtTime(0.1, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.85);
-    
+
     osc.start();
     osc.stop(now + 0.85);
 }
@@ -86,6 +99,14 @@ const spinBtn = document.getElementById('spin-btn');
 const statusLabel = document.getElementById('status-label');
 const resultDisplay = document.getElementById('result-display');
 const poolList = document.getElementById('pool-list');
+const pointerEl = document.querySelector('.pointer');
+
+const configPanel = document.getElementById('config-panel');
+const toggleConfigBtn = document.getElementById('toggle-config-btn');
+const noVariantProbabilityInput = document.getElementById('no-variant-probability');
+const configOptionsList = document.getElementById('config-options-list');
+const applyConfigBtn = document.getElementById('apply-config-btn');
+const resetConfigBtn = document.getElementById('reset-config-btn');
 
 let canvasSize = 460;
 let cx = canvasSize / 2;
@@ -107,64 +128,177 @@ resizeCanvas();
 
 let currentAngle = 0;
 let angularVelocity = 0;
-const friction = 0.982; // Controls deceleration rate
+const baseDrag = 0.996;
+const settleThreshold = 0.02;
 let isSpinning = false;
-let lastTickIndex = -1;
+let isSettling = false;
+let settleTargetAngle = 0;
+let pointerKick = 0;
+const pointerAngle = 1.5 * Math.PI;
+let lastPegCross = 0;
+
+function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}
+
+function normalizePositive(angle) {
+    const twoPi = 2 * Math.PI;
+    return ((angle % twoPi) + twoPi) % twoPi;
+}
+
+function normalizeSigned(angle) {
+    const wrapped = normalizePositive(angle);
+    return wrapped > Math.PI ? wrapped - (2 * Math.PI) : wrapped;
+}
+
+function getNoVariantOption() {
+    return configState.options.find(option => option.name === NO_VARIANT_NAME);
+}
+
+function getOtherOptions() {
+    return configState.options.filter(option => option.name !== NO_VARIANT_NAME);
+}
+
+function sanitizeOptionWeights() {
+    getOtherOptions().forEach(option => {
+        option.weight = Math.max(0, Math.round(option.weight || 0));
+    });
+}
+
+function computeNoVariantWeight() {
+    sanitizeOptionWeights();
+    const othersWeightSum = getOtherOptions().reduce((sum, option) => sum + option.weight, 0);
+    const probability = clamp(configState.noVariantProbability, MIN_PROBABILITY, MAX_PROBABILITY) / 100;
+
+    if (othersWeightSum <= 0) return 1;
+    if (probability <= 0) return 0;
+
+    const ratio = probability / (1 - probability);
+    return Math.max(1, Math.round(othersWeightSum * ratio));
+}
+
+function syncNoVariantWeight() {
+    const noVariant = getNoVariantOption();
+    if (!noVariant) return;
+    noVariant.weight = computeNoVariantWeight();
+}
 
 // Interleaves segments cleanly so high-weight values are evenly spaced
 function intersperseSlices(slices) {
     const groups = {};
-    slices.forEach(s => {
-        if (!groups[s.name]) groups[s.name] = [];
-        groups[s.name].push(s);
+    slices.forEach(slice => {
+        if (!groups[slice.name]) groups[slice.name] = [];
+        groups[slice.name].push(slice);
     });
-    
+
     const sortedGroups = Object.values(groups).sort((a, b) => b.length - a.length);
     const result = new Array(slices.length);
     let index = 0;
-    
+
     sortedGroups.forEach(group => {
         group.forEach(item => {
             while (result[index] !== undefined) {
                 index = (index + 1) % slices.length;
             }
             result[index] = item;
-            index = (index + 2) % slices.length; // Space placement intervals
+            index = (index + 2) % slices.length;
         });
     });
-    
+
     return result;
+}
+
+function syncPegCounter() {
+    if (!currentSlices.length) {
+        lastPegCross = 0;
+        return;
+    }
+    const sliceAngle = (2 * Math.PI) / currentSlices.length;
+    lastPegCross = Math.floor((currentAngle - pointerAngle) / sliceAngle);
 }
 
 // Dynamically populates wheel state from custom configuration rules
 function buildWheelPool(excludedNames = []) {
-    let rawPool = [];
-    WHEEL_CONFIG.options.forEach(opt => {
-        if (!excludedNames.includes(opt.name)) {
-            for (let i = 0; i < opt.weight; i++) {
-                rawPool.push({ name: opt.name, color: opt.color });
+    syncNoVariantWeight();
+
+    const rawPool = [];
+    configState.options.forEach(option => {
+        if (!excludedNames.includes(option.name) && option.weight > 0) {
+            for (let i = 0; i < option.weight; i++) {
+                rawPool.push({ name: option.name, color: option.color });
             }
         }
     });
 
+    if (!rawPool.length) {
+        const fallback = getNoVariantOption() || { name: NO_VARIANT_NAME, color: '#16162a', weight: 1 };
+        rawPool.push({ name: fallback.name, color: fallback.color });
+    }
+
     currentSlices = intersperseSlices(rawPool);
     updateUIOptionPool(excludedNames);
+    syncPegCounter();
 }
 
 // Displays visible labels of variants in the pool indicator panel
 function updateUIOptionPool(excludedNames) {
     poolList.innerHTML = '';
     const added = new Set();
-    WHEEL_CONFIG.options.forEach(opt => {
-        if (!excludedNames.includes(opt.name) && !added.has(opt.name)) {
-            added.add(opt.name);
+
+    configState.options.forEach(option => {
+        if (!excludedNames.includes(option.name) && !added.has(option.name) && option.weight > 0) {
+            added.add(option.name);
             const badge = document.createElement('div');
             badge.className = 'pool-item';
-            badge.style.borderLeft = `4px solid ${opt.color}`;
-            badge.textContent = `${opt.name} (${opt.weight > 0 ? 'W:' + opt.weight : 'Excluded'})`;
+            badge.style.borderLeft = `4px solid ${option.color}`;
+
+            if (option.name === NO_VARIANT_NAME) {
+                badge.textContent = `${option.name} (P:${configState.noVariantProbability}%, Auto W:${option.weight})`;
+            } else {
+                badge.textContent = `${option.name} (W:${option.weight})`;
+            }
+
             poolList.appendChild(badge);
         }
     });
+}
+
+function renderConfigForm() {
+    noVariantProbabilityInput.value = configState.noVariantProbability;
+    configOptionsList.innerHTML = '';
+
+    getOtherOptions().forEach(option => {
+        const row = document.createElement('div');
+        row.className = 'config-row';
+
+        const label = document.createElement('label');
+        label.textContent = option.name;
+
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '0';
+        input.step = '1';
+        input.value = option.weight;
+        input.dataset.optionName = option.name;
+
+        row.appendChild(label);
+        row.appendChild(input);
+        configOptionsList.appendChild(row);
+    });
+}
+
+function getStateExclusions() {
+    if (gameState === 'DOUBLE_1') {
+        return [NO_VARIANT_NAME, DOUBLE_VARIANT_NAME];
+    }
+    if (gameState === 'DOUBLE_2') {
+        return [NO_VARIANT_NAME, DOUBLE_VARIANT_NAME, doubleVariantSelections[0]];
+    }
+    return [];
+}
+
+function rebuildCurrentPoolForState() {
+    buildWheelPool(getStateExclusions());
 }
 
 // Canvas render loop containing physics ticks & bulb blinking animations
@@ -172,6 +306,8 @@ function drawWheel() {
     ctx.clearRect(0, 0, canvasSize, canvasSize);
 
     const numSlices = currentSlices.length;
+    if (!numSlices) return;
+
     const sliceAngle = (2 * Math.PI) / numSlices;
 
     // Draw slices
@@ -186,7 +322,7 @@ function drawWheel() {
         ctx.fillStyle = currentSlices[i].color;
         ctx.fill();
 
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
         ctx.lineWidth = 1;
         ctx.stroke();
 
@@ -201,71 +337,176 @@ function drawWheel() {
         if (canvasSize < 350) ctx.font = 'bold 9px "Exo 2", sans-serif';
         ctx.textAlign = 'right';
         ctx.textBaseline = 'middle';
-        
+
         let text = currentSlices[i].name;
-        if (text.length > 20) text = text.substring(0, 18) + '...';
+        if (text.length > 20) text = `${text.substring(0, 18)}...`;
 
         ctx.fillText(text, radius - 15, 0);
         ctx.restore();
     }
 
+    const gloss = ctx.createRadialGradient(cx - radius * 0.35, cy - radius * 0.45, radius * 0.2, cx, cy, radius);
+    gloss.addColorStop(0, 'rgba(255,255,255,0.24)');
+    gloss.addColorStop(0.6, 'rgba(255,255,255,0.02)');
+    gloss.addColorStop(1, 'rgba(0,0,0,0.22)');
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, 2 * Math.PI);
+    ctx.fillStyle = gloss;
+    ctx.fill();
+
+    // Draw wheel rim for depth
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius + 1.5, 0, 2 * Math.PI);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius - 9, 0, 2 * Math.PI);
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.4)';
+    ctx.lineWidth = 5;
+    ctx.stroke();
+
+    // Draw pegs around the circumference so pointer/peg interaction is visible
+    for (let i = 0; i < numSlices; i++) {
+        const pegAngle = currentAngle + i * sliceAngle;
+        const px = cx + (radius + 4) * Math.cos(pegAngle);
+        const py = cy + (radius + 4) * Math.sin(pegAngle);
+
+        const pegGradient = ctx.createRadialGradient(px - 1.5, py - 1.5, 0.8, px, py, 4);
+        pegGradient.addColorStop(0, 'rgba(255,255,255,0.95)');
+        pegGradient.addColorStop(0.55, 'rgba(220,220,230,0.95)');
+        pegGradient.addColorStop(1, 'rgba(80,80,90,1)');
+
+        ctx.beginPath();
+        ctx.arc(px, py, 3.6, 0, 2 * Math.PI);
+        ctx.fillStyle = pegGradient;
+        ctx.fill();
+    }
+
     // Draw central hub cap
+    const hubGradient = ctx.createRadialGradient(cx - 8, cy - 10, 2, cx, cy, 32);
+    hubGradient.addColorStop(0, '#ffffff');
+    hubGradient.addColorStop(0.25, '#b4c1db');
+    hubGradient.addColorStop(1, '#111526');
+
     ctx.beginPath();
     ctx.arc(cx, cy, 30, 0, 2 * Math.PI);
-    ctx.fillStyle = '#151226';
+    ctx.fillStyle = hubGradient;
     ctx.strokeStyle = '#00f0ff';
     ctx.lineWidth = 3;
     ctx.fill();
     ctx.stroke();
 
     // Alternate blinking light bulb borders (Wheel of Fortune style)
-    const numBulbs = 20;
-    const isLitState = Math.floor(Date.now() / 250) % 2 === 0;
+    const numBulbs = 24;
+    const isLitState = Math.floor(Date.now() / 220) % 2 === 0;
 
     for (let i = 0; i < numBulbs; i++) {
         const bulbAngle = (i * 2 * Math.PI) / numBulbs;
-        const bx = cx + (radius + 6) * Math.cos(bulbAngle);
-        const by = cy + (radius + 6) * Math.sin(bulbAngle);
+        const bx = cx + (radius + 11) * Math.cos(bulbAngle);
+        const by = cy + (radius + 11) * Math.sin(bulbAngle);
 
         ctx.beginPath();
-        ctx.arc(bx, by, 3.5, 0, 2 * Math.PI);
+        ctx.arc(bx, by, 3.3, 0, 2 * Math.PI);
         if ((i % 2 === 0 && isLitState) || (i % 2 !== 0 && !isLitState)) {
             ctx.fillStyle = '#ffe600';
         } else {
-            ctx.fillStyle = '#444455';
+            ctx.fillStyle = '#4b4b5e';
         }
         ctx.fill();
     }
 }
 
-// Updates rotation values and plays click sounds on slice margins
+function applyPointerMotion() {
+    pointerKick *= 0.8;
+    pointerEl.style.transform = `translateX(-50%) rotate(${pointerKick.toFixed(2)}deg)`;
+}
+
+function applyPegImpact(passes) {
+    const cappedPasses = Math.min(Math.max(1, passes), 5);
+
+    for (let i = 0; i < cappedPasses; i++) {
+        playClickSound();
+    }
+
+    const energyLoss = Math.min(0.04, (0.004 * cappedPasses) + (angularVelocity * 0.022));
+    angularVelocity = Math.max(0, angularVelocity - energyLoss);
+    pointerKick = Math.min(20, pointerKick + 4 + (angularVelocity * 17));
+}
+
+function detectPegCrossings() {
+    if (!currentSlices.length) return;
+
+    const sliceAngle = (2 * Math.PI) / currentSlices.length;
+    const pegCross = Math.floor((currentAngle - pointerAngle) / sliceAngle);
+    const passed = pegCross - lastPegCross;
+
+    if (passed > 0) {
+        applyPegImpact(passed);
+    }
+
+    lastPegCross = pegCross;
+}
+
+function startSettling() {
+    if (!currentSlices.length) return;
+    isSettling = true;
+
+    const sliceAngle = (2 * Math.PI) / currentSlices.length;
+    const pegFloat = (pointerAngle - currentAngle) / sliceAngle;
+    const nearestPeg = Math.round(pegFloat);
+    settleTargetAngle = pointerAngle - (nearestPeg * sliceAngle);
+}
+
+function getWinningIndex() {
+    if (!currentSlices.length) return 0;
+    const sliceAngle = (2 * Math.PI) / currentSlices.length;
+    let targetAngle = normalizePositive(pointerAngle - currentAngle - 0.00001);
+    return Math.floor(targetAngle / sliceAngle) % currentSlices.length;
+}
+
+function finishSpin() {
+    currentAngle = settleTargetAngle;
+    angularVelocity = 0;
+    isSpinning = false;
+    isSettling = false;
+    spinBtn.disabled = false;
+    handleResult(getWinningIndex());
+}
+
+function updateSpinningPhysics() {
+    currentAngle += angularVelocity;
+    angularVelocity *= baseDrag;
+    detectPegCrossings();
+
+    if (angularVelocity < settleThreshold) {
+        startSettling();
+    }
+}
+
+function updateSettlingPhysics() {
+    const delta = normalizeSigned(settleTargetAngle - currentAngle);
+    angularVelocity += delta * 0.11;
+    angularVelocity *= 0.72;
+    currentAngle += angularVelocity;
+
+    if (Math.abs(delta) < 0.0009 && Math.abs(angularVelocity) < 0.0009) {
+        finishSpin();
+    }
+}
+
+// Updates rotation values and peg interactions each frame
 function updatePhysics() {
     if (isSpinning) {
-        currentAngle += angularVelocity;
-        angularVelocity *= friction;
-
-        const numSlices = currentSlices.length;
-        const sliceAngle = (2 * Math.PI) / numSlices;
-        
-        // Target index relative to the top physical pointer (3/2 PI)
-        const pointerAngle = 1.5 * Math.PI;
-        let targetAngle = (pointerAngle - currentAngle) % (2 * Math.PI);
-        if (targetAngle < 0) targetAngle += 2 * Math.PI;
-
-        const currentTickIndex = Math.floor(targetAngle / sliceAngle);
-
-        if (currentTickIndex !== lastTickIndex) {
-            playClickSound();
-            lastTickIndex = currentTickIndex;
-        }
-
-        if (angularVelocity < 0.001) {
-            angularVelocity = 0;
-            isSpinning = false;
-            spinBtn.disabled = false;
-            handleResult(currentTickIndex);
+        if (!isSettling) {
+            updateSpinningPhysics();
+        } else {
+            updateSettlingPhysics();
         }
     }
+
+    applyPointerMotion();
     drawWheel();
     requestAnimationFrame(updatePhysics);
 }
@@ -273,41 +514,41 @@ function updatePhysics() {
 // Logic engine for standard spins and Double Variant branching choices
 function handleResult(winningIndex) {
     const winner = currentSlices[winningIndex];
-    
+
     if (gameState === 'NORMAL') {
-        if (winner.name === 'Double Variant') {
+        if (winner.name === DOUBLE_VARIANT_NAME) {
             gameState = 'DOUBLE_1';
             playDoubleWarpSound();
-            statusLabel.textContent = "CRITICAL EVENT DETECTED!";
-            resultDisplay.textContent = "DOUBLE VARIANT! Transitioning...";
-            
+            statusLabel.textContent = 'CRITICAL EVENT DETECTED!';
+            resultDisplay.textContent = 'DOUBLE VARIANT! Transitioning...';
+
             triggerWarpTransition(() => {
-                buildWheelPool(['No Variants (Rewards only)', 'Double Variant']);
-                statusLabel.textContent = "Double Variant Selection (1/2)";
-                resultDisplay.textContent = "Spin to select the First Variant!";
-                spinBtn.textContent = "SPIN VARIANT 1";
+                buildWheelPool([NO_VARIANT_NAME, DOUBLE_VARIANT_NAME]);
+                statusLabel.textContent = 'Double Variant Selection (1/2)';
+                resultDisplay.textContent = 'Spin to select the First Variant!';
+                spinBtn.textContent = 'SPIN VARIANT 1';
             });
         } else {
             gameState = 'FINISHED';
             playWinChime();
-            statusLabel.textContent = "Selected Variant";
+            statusLabel.textContent = 'Selected Variant';
             resultDisplay.textContent = winner.name;
-            spinBtn.textContent = "RESET WHEEL";
+            spinBtn.textContent = 'RESET WHEEL';
         }
     } else if (gameState === 'DOUBLE_1') {
         doubleVariantSelections.push(winner.name);
         playWinChime();
-        statusLabel.textContent = "First Variant Locked!";
+        statusLabel.textContent = 'First Variant Locked!';
         resultDisplay.textContent = `${winner.name}! Preparing phase 2...`;
         spinBtn.disabled = true;
 
         setTimeout(() => {
             triggerWarpTransition(() => {
-                buildWheelPool(['No Variants (Rewards only)', 'Double Variant', doubleVariantSelections[0]]);
+                buildWheelPool([NO_VARIANT_NAME, DOUBLE_VARIANT_NAME, doubleVariantSelections[0]]);
                 gameState = 'DOUBLE_2';
-                statusLabel.textContent = "Double Variant Selection (2/2)";
+                statusLabel.textContent = 'Double Variant Selection (2/2)';
                 resultDisplay.textContent = `Got [${doubleVariantSelections[0]}]. Spin for second option!`;
-                spinBtn.textContent = "SPIN VARIANT 2";
+                spinBtn.textContent = 'SPIN VARIANT 2';
                 spinBtn.disabled = false;
             });
         }, 1800);
@@ -315,9 +556,9 @@ function handleResult(winningIndex) {
         doubleVariantSelections.push(winner.name);
         gameState = 'FINISHED';
         playWinChime();
-        statusLabel.textContent = "Double Variant Selected!";
+        statusLabel.textContent = 'Double Variant Selected!';
         resultDisplay.innerHTML = `<span style="font-size: 1.25rem; color:#ff9ff3;">${doubleVariantSelections[0]}</span><br>&<br><span style="font-size: 1.25rem; color:#ff9ff3;">${doubleVariantSelections[1]}</span>`;
-        spinBtn.textContent = "RESET WHEEL";
+        spinBtn.textContent = 'RESET WHEEL';
     }
 }
 
@@ -330,29 +571,102 @@ function triggerWarpTransition(midpointCallback) {
     }, 500);
 }
 
+function startSpin() {
+    if (!currentSlices.length) return;
+    isSpinning = true;
+    isSettling = false;
+    spinBtn.disabled = true;
+    angularVelocity = 0.28 + (Math.random() * 0.22);
+    pointerKick = 0;
+    syncPegCounter();
+}
+
+function resetGame() {
+    gameState = 'NORMAL';
+    doubleVariantSelections = [];
+    rebuildCurrentPoolForState();
+    statusLabel.textContent = 'Ready to Roll';
+    resultDisplay.textContent = 'Spin the wheel to begin!';
+    spinBtn.textContent = 'SPIN WHEEL';
+}
+
+function applyConfigFromForm() {
+    const probabilityValue = parseInt(noVariantProbabilityInput.value, 10);
+    configState.noVariantProbability = Number.isFinite(probabilityValue)
+        ? clamp(probabilityValue, MIN_PROBABILITY, MAX_PROBABILITY)
+        : 50;
+
+    configOptionsList.querySelectorAll('input[data-option-name]').forEach(input => {
+        const option = configState.options.find(item => item.name === input.dataset.optionName);
+        if (!option) return;
+
+        const weightValue = parseInt(input.value, 10);
+        option.weight = Number.isFinite(weightValue) ? Math.max(0, weightValue) : option.weight;
+    });
+
+    syncNoVariantWeight();
+    renderConfigForm();
+    rebuildCurrentPoolForState();
+
+    if (gameState === 'FINISHED') {
+        statusLabel.textContent = 'Configuration Updated';
+        resultDisplay.textContent = 'Press RESET WHEEL to spin with new settings';
+    }
+}
+
+function resetConfig() {
+    configState.options = baseOptions.map(option => ({ ...option }));
+    configState.noVariantProbability = clamp(
+        Number.isFinite(WHEEL_CONFIG.noVariantProbability) ? WHEEL_CONFIG.noVariantProbability : 50,
+        MIN_PROBABILITY,
+        MAX_PROBABILITY
+    );
+
+    syncNoVariantWeight();
+    renderConfigForm();
+    rebuildCurrentPoolForState();
+
+    statusLabel.textContent = 'Configuration Reset';
+    resultDisplay.textContent = 'Wheel settings restored to defaults';
+}
+
 // Trigger action bound to the primary CTA element
 spinBtn.addEventListener('click', () => {
     initAudio();
 
     if (gameState === 'FINISHED') {
-        // Reset full sequence back to primary state
-        gameState = 'NORMAL';
-        doubleVariantSelections = [];
-        buildWheelPool([]);
-        statusLabel.textContent = "Ready to Roll";
-        resultDisplay.textContent = "Spin the wheel to begin!";
-        spinBtn.textContent = "SPIN WHEEL";
+        resetGame();
         return;
     }
 
     if (!isSpinning) {
-        isSpinning = true;
-        spinBtn.disabled = true;
-        // Generate high randomized force speed values
-        angularVelocity = 0.35 + Math.random() * 0.25;
+        startSpin();
     }
 });
 
+toggleConfigBtn.addEventListener('click', () => {
+    const nowHidden = !configPanel.hasAttribute('hidden');
+    if (nowHidden) {
+        configPanel.setAttribute('hidden', 'hidden');
+        toggleConfigBtn.textContent = 'Configure Wheel';
+    } else {
+        configPanel.removeAttribute('hidden');
+        toggleConfigBtn.textContent = 'Hide Configuration';
+    }
+});
+
+applyConfigBtn.addEventListener('click', () => {
+    if (isSpinning) return;
+    applyConfigFromForm();
+});
+
+resetConfigBtn.addEventListener('click', () => {
+    if (isSpinning) return;
+    resetConfig();
+});
+
 // Setup primary base configuration on script launch
+syncNoVariantWeight();
+renderConfigForm();
 buildWheelPool([]);
 updatePhysics();

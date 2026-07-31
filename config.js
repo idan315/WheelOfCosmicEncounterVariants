@@ -1,5 +1,6 @@
 // config.js
 const WHEEL_CONFIG = {
+    noVariantProbability: 50,
     options: [
         { name: "No Variants (Rewards only)", weight: 14, color: "#16162a" }, // Deep Space Black/Blue
         { name: "Ultra Rewards", weight: 1, color: "#ff007f" },             // Neon Magenta

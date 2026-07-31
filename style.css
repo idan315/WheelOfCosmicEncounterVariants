@@ -237,6 +237,10 @@ canvas.transitioning {
     gap: 10px;
 }
 
+.config-panel[hidden] {
+    display: none !important;
+}
+
 .config-row {
     display: flex;
     gap: 10px;

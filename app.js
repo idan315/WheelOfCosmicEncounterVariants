@@ -849,6 +849,119 @@ function resetConfig() {
     resultDisplay.textContent = 'Wheel settings restored to defaults';
 }
 
+// Drag-to-spin gesture on the wheel canvas
+// Tracks the pointer/touch angle around the wheel centre and translates the
+// resulting angular velocity into a sim.spin() call on release.
+(function attachDragSpin() {
+    const MIN_DRAG_SPEED = 1.5;   // rad/s — below this a tap is ignored
+    const VELOCITY_WINDOW = 0.12; // seconds of history used to compute flick speed
+
+    let dragging = false;
+    let lastAngle = 0;
+    let samples = [];             // { t, angle } circular buffer
+
+    function getCanvasAngle(clientX, clientY) {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const x = (clientX - rect.left) * scaleX - cx;
+        const y = (clientY - rect.top) * scaleY - cy;
+        return Math.atan2(y, x);
+    }
+
+    function onDragStart(clientX, clientY) {
+        initAudio();
+        dragging = true;
+        lastAngle = getCanvasAngle(clientX, clientY);
+        samples = [{ t: performance.now(), angle: lastAngle }];
+    }
+
+    function angleDelta(from, to) {
+        // Shortest signed difference between two angles
+        let d = to - from;
+        while (d > Math.PI) d -= 2 * Math.PI;
+        while (d < -Math.PI) d += 2 * Math.PI;
+        return d;
+    }
+
+    function onDragMove(clientX, clientY) {
+        if (!dragging) return;
+        const now = performance.now();
+        const angle = getCanvasAngle(clientX, clientY);
+        const delta = angleDelta(lastAngle, angle);
+
+        // Directly rotate the wheel while dragging (gives tactile feedback)
+        sim.state.wheelAngle += delta;
+        lastAngle = angle;
+
+        samples.push({ t: now, angle });
+
+        // Keep only samples within the velocity window
+        const cutoff = now - VELOCITY_WINDOW * 1000;
+        while (samples.length > 2 && samples[0].t < cutoff) {
+            samples.shift();
+        }
+    }
+
+    function onDragEnd() {
+        if (!dragging) return;
+        dragging = false;
+
+        if (isSpinning || samples.length < 2) return;
+
+        // Compute angular velocity over the recent sample window
+        const first = samples[0];
+        const last = samples[samples.length - 1];
+        const dt = (last.t - first.t) / 1000;
+        if (dt <= 0) return;
+
+        let totalDelta = 0;
+        for (let i = 1; i < samples.length; i++) {
+            totalDelta += angleDelta(samples[i - 1].angle, samples[i].angle);
+        }
+        const omega = totalDelta / dt;  // rad/s
+
+        if (Math.abs(omega) < MIN_DRAG_SPEED) return;
+
+        // Clamp to the same speed range as the button spin
+        const clampedOmega = clamp(Math.abs(omega), MIN_SPIN_SPEED, MAX_SPIN_SPEED) * Math.sign(omega);
+
+        if (gameState === 'FINISHED') {
+            resetGame();
+        }
+
+        isSpinning = true;
+        spinBtn.disabled = true;
+        statusLabel.textContent = 'Spinning...';
+        resultDisplay.textContent = 'The wheel is turning!';
+        startSpinSound();
+        syncPegCounter();
+        sim.spin(clampedOmega);
+    }
+
+    // Pointer events (desktop + touch via pointer API)
+    canvas.addEventListener('pointerdown', e => {
+        e.preventDefault();
+        canvas.setPointerCapture(e.pointerId);
+        onDragStart(e.clientX, e.clientY);
+    });
+
+    canvas.addEventListener('pointermove', e => {
+        if (!dragging) return;
+        e.preventDefault();
+        onDragMove(e.clientX, e.clientY);
+    });
+
+    canvas.addEventListener('pointerup', e => {
+        e.preventDefault();
+        onDragEnd();
+    });
+
+    canvas.addEventListener('pointercancel', () => {
+        dragging = false;
+    });
+}());
+
 // Trigger action bound to the primary CTA element
 spinBtn.addEventListener('click', () => {
     initAudio();

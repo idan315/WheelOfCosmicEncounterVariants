@@ -96,6 +96,7 @@ header {
     height: 100%;
     border-radius: 50%;
     overflow: hidden;
+    touch-action: none;
 }
 
 canvas {
